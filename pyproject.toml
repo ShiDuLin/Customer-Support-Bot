@@ -1,0 +1,21 @@
+[project]
+name = "langchaindemo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain",
+    "langchain-community",
+    "langgraph",
+    "langchain-anthropic",
+    "tavily-python",
+    "langgraph-checkpoint-sqlite",
+    "langchain-openai",
+    "langchain_deepseek",
+    "langchain-chroma",
+    "langsmith",
+    "pandas",
+    "openai",
+    "pytz>=2025.2",
+]
