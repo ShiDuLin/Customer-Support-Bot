@@ -40,15 +40,15 @@ def search_car_rentals(
             params.append(f"%{value}%")
     
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
-            # For our tutorial, we will let you match on any dates and price tier.
-            # (since our toy dataset doesn't have much data)
-            cursor.execute(base_query, params)
-            results = cursor.fetchall()
-
-            return [
-                dict(zip([column[0] for column in cursor.description], row)) for row in results
-            ]
+        cursor = conn.cursor()
+        # For our tutorial, we will let you match on any dates and price tier.
+        # (since our toy dataset doesn't have much data)
+        cursor.execute(base_query, params)
+        results = [
+            dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()
+        ]
+        cursor.close()
+        return results
 
 
 @tool
@@ -63,15 +63,17 @@ def book_car_rental(rental_id: int) -> str:
         str: A message indicating whether the car rental was successfully booked or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute("UPDATE car_rentals SET booked = 1 WHERE id = ?", (rental_id,))
-            conn.commit()
+        cursor.execute("UPDATE car_rentals SET booked = 1 WHERE id = ?", (rental_id,))
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Car rental {rental_id} successfully booked."
-            else:
-                return f"No car rental found with ID {rental_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Car rental {rental_id} successfully booked."
+        else:
+            cursor.close()
+            return f"No car rental found with ID {rental_id}."
 
 
 @tool
@@ -99,24 +101,26 @@ def update_car_rental(
     #     "name": (name, "name LIKE ?"),
     # }
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            if start_date:
-                cursor.execute(
-                    "UPDATE car_rentals SET start_date = ? WHERE id = ?",
-                    (start_date, rental_id),
-                )
-            if end_date:
-                cursor.execute(
-                    "UPDATE car_rentals SET end_date = ? WHERE id = ?", (end_date, rental_id)
-                )
+        if start_date:
+            cursor.execute(
+                "UPDATE car_rentals SET start_date = ? WHERE id = ?",
+                (start_date, rental_id),
+            )
+        if end_date:
+            cursor.execute(
+                "UPDATE car_rentals SET end_date = ? WHERE id = ?", (end_date, rental_id)
+            )
 
-            conn.commit()
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Car rental {rental_id} successfully updated."
-            else:
-                return f"No car rental found with ID {rental_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Car rental {rental_id} successfully updated."
+        else:
+            cursor.close()
+            return f"No car rental found with ID {rental_id}."
 
 
 @tool
@@ -131,12 +135,14 @@ def cancel_car_rental(rental_id: int) -> str:
         str: A message indicating whether the car rental was successfully cancelled or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute("UPDATE car_rentals SET booked = 0 WHERE id = ?", (rental_id,))
-            conn.commit()
+        cursor.execute("UPDATE car_rentals SET booked = 0 WHERE id = ?", (rental_id,))
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Car rental {rental_id} successfully cancelled."
-            else:
-                return f"No car rental found with ID {rental_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Car rental {rental_id} successfully cancelled."
+        else:
+            cursor.close()
+            return f"No car rental found with ID {rental_id}."

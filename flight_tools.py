@@ -23,29 +23,30 @@ def fetch_user_flight_information(config: RunnableConfig) -> list[dict]:
         raise ValueError("No passenger ID configured.")
 
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT 
-                    t.ticket_no, t.book_ref,
-                    f.flight_id, f.flight_no, f.departure_airport, f.arrival_airport,
-                    f.scheduled_departure, f.scheduled_arrival,
-                    bp.seat_no, tf.fare_conditions
-                FROM tickets t
-                JOIN ticket_flights tf ON t.ticket_no = tf.ticket_no
-                JOIN flights f ON tf.flight_id = f.flight_id
-                JOIN boarding_passes bp ON bp.ticket_no = t.ticket_no 
-                    AND bp.flight_id = f.flight_id
-                WHERE t.passenger_id = ?
-                LIMIT 100  -- 防爆措施
-            """, (passenger_id,))
-            
-            return [
-                dict(zip(
-                    [col[0] for col in cursor.description], 
-                    row
-                ))
-                for row in cursor.fetchall()
-            ]
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                t.ticket_no, t.book_ref,
+                f.flight_id, f.flight_no, f.departure_airport, f.arrival_airport,
+                f.scheduled_departure, f.scheduled_arrival,
+                bp.seat_no, tf.fare_conditions
+            FROM tickets t
+            JOIN ticket_flights tf ON t.ticket_no = tf.ticket_no
+            JOIN flights f ON tf.flight_id = f.flight_id
+            JOIN boarding_passes bp ON bp.ticket_no = t.ticket_no 
+                AND bp.flight_id = f.flight_id
+            WHERE t.passenger_id = ?
+            LIMIT 100  -- 防爆措施
+        """, (passenger_id,))
+        result = [
+            dict(zip(
+                [col[0] for col in cursor.description], 
+                row
+            ))
+            for row in cursor.fetchall()
+        ]
+        cursor.close()
+        return result
 
 
 @tool
@@ -87,15 +88,17 @@ def search_flights(
     
     # 执行查询
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(base_query, params)
-            return [
-                dict(zip(
-                    [col[0] for col in cursor.description],
-                    row
-                ))
-                for row in cursor.fetchall()
-            ]
+        cursor = conn.cursor()
+        cursor.execute(base_query, params)
+        result = [
+            dict(zip(
+                [col[0] for col in cursor.description], 
+                row
+            ))
+            for row in cursor.fetchall()
+        ]
+        cursor.close()
+        return result
         
 
 @tool(return_direct=True)
@@ -112,37 +115,40 @@ def update_ticket_to_new_flight(
         raise ValueError("Passenger ID required in config.configurable")
 
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
-            # 验证目标航班
-            cursor.execute(
-                """SELECT departure_airport, arrival_airport, scheduled_departure 
-                FROM flights WHERE flight_id = ?""",
-                (new_flight_id,)
-            )
-            if not (new_flight := cursor.fetchone()):
-                return "Invalid new flight ID"
-                
-            # 解析航班时间
-            dep_airport, arr_airport, dep_time_str = new_flight
-            dep_time = datetime.fromisoformat(dep_time_str)
-            if (dep_time - datetime.now(pytz.utc)).total_seconds() < 10800:
-                return f"Cannot reschedule to flight departing in <3 hours ({dep_time})"
+        cursor = conn.cursor()
+        # 验证目标航班
+        cursor.execute(
+            """SELECT departure_airport, arrival_airport, scheduled_departure 
+            FROM flights WHERE flight_id = ?""",
+            (new_flight_id,)
+        )
+        if not (new_flight := cursor.fetchone()):
+            return "Invalid new flight ID"
+            
+        # 解析航班时间
+        dep_airport, arr_airport, dep_time_str = new_flight
+        dep_time = datetime.fromisoformat(dep_time_str)
+        if (dep_time - datetime.now(pytz.utc)).total_seconds() < 10800:
+            cursor.close()
+            return f"Cannot reschedule to flight departing in <3 hours ({dep_time})"
 
-            # 验证机票所有权
-            cursor.execute(
-                """SELECT 1 FROM tickets t
-                JOIN ticket_flights tf ON t.ticket_no = tf.ticket_no
-                WHERE t.ticket_no = ? AND t.passenger_id = ?""",
-                (ticket_no, passenger_id)
-            )
-            if not cursor.fetchone():
-                return f"Passenger {passenger_id} does not own ticket {ticket_no}"
+        # 验证机票所有权
+        cursor.execute(
+            """SELECT 1 FROM tickets t
+            JOIN ticket_flights tf ON t.ticket_no = tf.ticket_no
+            WHERE t.ticket_no = ? AND t.passenger_id = ?""",
+            (ticket_no, passenger_id)
+        )
+        if not cursor.fetchone():
+            cursor.close()
+            return f"Passenger {passenger_id} does not own ticket {ticket_no}"
 
-            # 执行改签
-            cursor.execute(
-                "UPDATE ticket_flights SET flight_id = ? WHERE ticket_no = ?",
-                (new_flight_id, ticket_no))
-            conn.commit()
+        # 执行改签
+        cursor.execute(
+            "UPDATE ticket_flights SET flight_id = ? WHERE ticket_no = ?",
+            (new_flight_id, ticket_no))
+        conn.commit()
+        cursor.close()
             
     return f"Successfully updated ticket {ticket_no} to flight {new_flight_id}"
 
@@ -156,25 +162,28 @@ def cancel_ticket(ticket_no: str, *, config: RunnableConfig) -> str:
         raise ValueError("No passenger ID configured.")
     
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute(
-                "SELECT flight_id FROM ticket_flights WHERE ticket_no = ?", (ticket_no,)
-            )
+        cursor.execute(
+            "SELECT flight_id FROM ticket_flights WHERE ticket_no = ?", (ticket_no,)
+        )
+    
+        if not cursor.fetchone():
+            cursor.close()
+            return "No existing ticket found for the given ticket number."
+
+        # Check the signed-in user actually has this ticket
+        cursor.execute(
+            "SELECT ticket_no FROM tickets WHERE ticket_no = ? AND passenger_id = ?",
+            (ticket_no, passenger_id),
+        )
         
-            if not cursor.fetchone():
-                return "No existing ticket found for the given ticket number."
+        if not cursor.fetchone():
+            cursor.close()
+            return f"Current signed-in passenger with ID {passenger_id} not the owner of ticket {ticket_no}"
 
-            # Check the signed-in user actually has this ticket
-            cursor.execute(
-                "SELECT ticket_no FROM tickets WHERE ticket_no = ? AND passenger_id = ?",
-                (ticket_no, passenger_id),
-            )
-            
-            if not cursor.fetchone():
-                return f"Current signed-in passenger with ID {passenger_id} not the owner of ticket {ticket_no}"
+        cursor.execute("DELETE FROM ticket_flights WHERE ticket_no = ?", (ticket_no,))
+        conn.commit()
+        cursor.close()
 
-            cursor.execute("DELETE FROM ticket_flights WHERE ticket_no = ?", (ticket_no,))
-            conn.commit()
-
-            return "Ticket successfully cancelled."
+    return "Ticket successfully cancelled."

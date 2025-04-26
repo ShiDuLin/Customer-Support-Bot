@@ -40,15 +40,16 @@ def search_hotels(
             params.append(f"%{value}%")
     
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            # For the sake of this tutorial, we will let you match on any dates and price tier.
-            cursor.execute(base_query, params)
-            results = cursor.fetchall()
+        # For the sake of this tutorial, we will let you match on any dates and price tier.
+        cursor.execute(base_query, params)
+        results = [
+            dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()
+        ]
 
-            return [
-                dict(zip([column[0] for column in cursor.description], row)) for row in results
-            ]
+        cursor.close()
+        return results
 
 
 @tool
@@ -63,15 +64,17 @@ def book_hotel(hotel_id: int) -> str:
         str: A message indicating whether the hotel was successfully booked or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute("UPDATE hotels SET booked = 1 WHERE id = ?", (hotel_id,))
-            conn.commit()
+        cursor.execute("UPDATE hotels SET booked = 1 WHERE id = ?", (hotel_id,))
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Hotel {hotel_id} successfully booked."
-            else:
-                return f"No hotel found with ID {hotel_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Hotel {hotel_id} successfully booked."
+        else:
+            cursor.close()
+            return f"No hotel found with ID {hotel_id}."
 
 
 @tool
@@ -92,24 +95,26 @@ def update_hotel(
         str: A message indicating whether the hotel was successfully updated or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            if checkin_date:
-                cursor.execute(
-                    "UPDATE hotels SET checkin_date = ? WHERE id = ?", (checkin_date, hotel_id)
-                )
-            if checkout_date:
-                cursor.execute(
-                    "UPDATE hotels SET checkout_date = ? WHERE id = ?",
-                    (checkout_date, hotel_id),
-                )
+        if checkin_date:
+            cursor.execute(
+                "UPDATE hotels SET checkin_date = ? WHERE id = ?", (checkin_date, hotel_id)
+            )
+        if checkout_date:
+            cursor.execute(
+                "UPDATE hotels SET checkout_date = ? WHERE id = ?",
+                (checkout_date, hotel_id),
+            )
 
-            conn.commit()
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Hotel {hotel_id} successfully updated."
-            else:
-                return f"No hotel found with ID {hotel_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Hotel {hotel_id} successfully updated."
+        else:
+            cursor.close()
+            return f"No hotel found with ID {hotel_id}."
 
 
 @tool
@@ -124,12 +129,14 @@ def cancel_hotel(hotel_id: int) -> str:
         str: A message indicating whether the hotel was successfully cancelled or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute("UPDATE hotels SET booked = 0 WHERE id = ?", (hotel_id,))
-            conn.commit()
+        cursor.execute("UPDATE hotels SET booked = 0 WHERE id = ?", (hotel_id,))
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Hotel {hotel_id} successfully cancelled."
-            else:
-                return f"No hotel found with ID {hotel_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Hotel {hotel_id} successfully cancelled."
+        else:
+            cursor.close()
+            return f"No hotel found with ID {hotel_id}."

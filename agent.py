@@ -4,6 +4,7 @@ from typing import Dict, Any, List
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
+from langchain.tools import TavilySearchResults
 
 # LangGraph 导入
 from langgraph.graph import StateGraph, START, END
@@ -26,6 +27,8 @@ from utilities_tools import create_tool_node_with_fallback
 
 # 构建工具列表
 tools = [
+    TavilySearchResults(max_results=1),
+
     # 航班工具
     lookup_policy,
     fetch_user_flight_information,
@@ -164,3 +167,4 @@ def process_message(agent_graph, message: str, chat_history: List[BaseMessage] =
         "response": response,
         "chat_history": chat_history
     }
+

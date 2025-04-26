@@ -45,15 +45,16 @@ def search_trip_recommendations(
         params.extend([f"%{keyword}%" for keyword in keyword_list])
 
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(base_query, params)
-            results = cursor.fetchall()
+        cursor = conn.cursor()
+        cursor.execute(base_query, params)
 
-            conn.close()
+        results = [
+            dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()
+        ]
 
-            return [
-                dict(zip([column[0] for column in cursor.description], row)) for row in results
-            ]
+        cursor.close()
+
+        return results
 
 
 @tool
@@ -68,17 +69,19 @@ def book_excursion(recommendation_id: int) -> str:
         str: A message indicating whether the trip recommendation was successfully booked or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute(
-                "UPDATE trip_recommendations SET booked = 1 WHERE id = ?", (recommendation_id,)
-            )
-            conn.commit()
+        cursor.execute(
+            "UPDATE trip_recommendations SET booked = 1 WHERE id = ?", (recommendation_id,)
+        )
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Trip recommendation {recommendation_id} successfully booked."
-            else:
-                return f"No trip recommendation found with ID {recommendation_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Trip recommendation {recommendation_id} successfully booked."
+        else:
+            cursor.close()
+            return f"No trip recommendation found with ID {recommendation_id}."
 
 
 @tool
@@ -94,18 +97,20 @@ def update_excursion(recommendation_id: int, details: str) -> str:
         str: A message indicating whether the trip recommendation was successfully updated or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute(
-                "UPDATE trip_recommendations SET details = ? WHERE id = ?",
-                (details, recommendation_id),
-            )
-            conn.commit()
+        cursor.execute(
+            "UPDATE trip_recommendations SET details = ? WHERE id = ?",
+            (details, recommendation_id),
+        )
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Trip recommendation {recommendation_id} successfully updated."
-            else:
-                return f"No trip recommendation found with ID {recommendation_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Trip recommendation {recommendation_id} successfully updated."
+        else:
+            cursor.close()
+            return f"No trip recommendation found with ID {recommendation_id}."
 
 
 @tool
@@ -120,14 +125,16 @@ def cancel_excursion(recommendation_id: int) -> str:
         str: A message indicating whether the trip recommendation was successfully cancelled or not.
     """
     with sqlite3.connect(db) as conn:
-        with conn.cursor() as cursor:
+        cursor = conn.cursor()
 
-            cursor.execute(
-                "UPDATE trip_recommendations SET booked = 0 WHERE id = ?", (recommendation_id,)
-            )
-            conn.commit()
+        cursor.execute(
+            "UPDATE trip_recommendations SET booked = 0 WHERE id = ?", (recommendation_id,)
+        )
+        conn.commit()
 
-            if cursor.rowcount > 0:
-                return f"Trip recommendation {recommendation_id} successfully cancelled."
-            else:
-                return f"No trip recommendation found with ID {recommendation_id}."
+        if cursor.rowcount > 0:
+            cursor.close()
+            return f"Trip recommendation {recommendation_id} successfully cancelled."
+        else:
+            cursor.close()
+            return f"No trip recommendation found with ID {recommendation_id}."
