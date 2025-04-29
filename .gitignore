@@ -16,3 +16,18 @@ wheels/
 *.sqlite
 *.sqlite3
 *.db
+
+# 日志文件
+*.log
+*.log.*
+*.log.*.*
+
+# 临时文件
+*.tmp
+*.tmp.*
+*.tmp.*.*
+
+# 图片文件
+*.jpg
+*.jpeg
+*.png

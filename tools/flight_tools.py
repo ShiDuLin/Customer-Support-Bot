@@ -6,8 +6,8 @@ import pytz
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from db import db
-from retriever import lookup_policy
+from db.db import db
+# from db.retriever import lookup_policy
 
 @tool
 def fetch_user_flight_information(config: RunnableConfig) -> list[dict]:

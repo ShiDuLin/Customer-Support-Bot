@@ -1,111 +1,42 @@
 import os
 import uuid
-from datetime import datetime
-
-from langchain.prompts import ChatPromptTemplate
+from typing import Literal
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.runnables import Runnable, RunnableConfig
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, MessagesState, StateGraph
-from langgraph.prebuilt.tool_node import tools_condition
-
-from car_rental_tools import (
-    book_car_rental,
-    cancel_car_rental,
-    search_car_rentals,
-    update_car_rental,
+from langgraph.graph import END, START, StateGraph
+from assistants.common import State
+from assistants.subgraph_factory import create_specialized_subgraph
+from assistants.primary import (
+    primary_assistant_tools,
+    route_primary_assistant,
+    create_primary_assistant,
 )
-from excursions_tools import (
-    book_excursion,
-    cancel_excursion,
-    search_trip_recommendations,
-    update_excursion,
+from assistants.flight import (
+    flight_booking_prompt,
+    update_flight_safe_tools,
+    update_flight_sensitive_tools,
+    route_update_flight,
 )
-from flight_tools import (
-    cancel_ticket,
-    fetch_user_flight_information,
-    search_flights,
-    update_ticket_to_new_flight,
+from assistants.hotel import (
+    book_hotel_prompt,
+    book_hotel_safe_tools,
+    book_hotel_sensitive_tools,
+    route_book_hotel,
 )
-from hotel_tool import book_hotel, cancel_hotel, search_hotels, update_hotel
-
-# 导入所有工具
-from retriever import lookup_policy
-from utilities_tools import create_tool_node_with_fallback
-
-
-class State(MessagesState):
-    user_info: str
-
-
-class Assistant:
-    def __init__(self, runnable: Runnable):
-        self.runnable = runnable
-
-    def __call__(self, state: State, config: RunnableConfig):
-        while True:
-            result = self.runnable.invoke(state)
-            # If the LLM happens to return an empty response, we will re-prompt it
-            # for an actual response.
-            if not result.tool_calls and (
-                not result.content
-                or isinstance(result.content, list)
-                and not result.content[0].get("text")
-            ):
-                messages = state["messages"] + [("user", "Respond with a real output.")]
-                state = {**state, "messages": messages}
-            else:
-                break
-        return {"messages": result}
-
-
-llm = ChatOpenAI(
-    base_url=os.environ.get("MODEL_BASE_URL"),
-    api_key=os.environ.get("OPENAI_API_KEY"),
-    model="gpt-3.5-turbo",
-    temperature=1,
-    streaming=True,
+from assistants.car_rental import (
+    book_car_rental_prompt,
+    book_car_rental_safe_tools,
+    book_car_rental_sensitive_tools,
+    route_book_car_rental,
 )
-
-primary_assistant_prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a helpful customer support assistant for Swiss Airlines. "
-            " Use the provided tools to search for flights, company policies, and other information to assist the user's queries. "
-            " When searching, be persistent. Expand your query bounds if the first search returns no results. "
-            " If a search comes up empty, expand your search before giving up."
-            "\n\nCurrent user:\n<User>\n{user_info}\n</User>"
-            "\nCurrent time: {time}.",
-        ),
-        ("placeholder", "{messages}"),
-    ]
-).partial(time=datetime.now)
-
-tools = [
-    # 航班工具
-    lookup_policy,
-    fetch_user_flight_information,
-    search_flights,
-    update_ticket_to_new_flight,
-    cancel_ticket,
-    # 酒店工具
-    search_hotels,
-    book_hotel,
-    update_hotel,
-    cancel_hotel,
-    # 租车工具
-    search_car_rentals,
-    book_car_rental,
-    update_car_rental,
-    cancel_car_rental,
-    # 旅游工具
-    search_trip_recommendations,
-    book_excursion,
-    update_excursion,
-    cancel_excursion,
-]
+from assistants.excursion import (
+    book_excursion_prompt,
+    book_excursion_safe_tools,
+    book_excursion_sensitive_tools,
+    route_book_excursion,
+)
+from tools.flight_tools import fetch_user_flight_information
+from tools.utilities_tools import create_tool_node_with_fallback
 
 
 def user_info(state: State):
@@ -118,21 +49,139 @@ def get_user_id():
     return "0000 000001"
 
 
+def pop_dialog_state(state: State) -> dict:
+    """弹出对话状态栈并返回主助手"""
+    messages = []
+    if state["messages"][-1].tool_calls:
+        messages.append(
+            ToolMessage(
+                content="Resuming dialog with the host assistant. Please reflect on the past conversation and assist the user as needed.",
+                tool_call_id=state["messages"][-1].tool_calls[0]["id"],
+            )
+        )
+    return {
+        "dialog_state": "pop",
+        "messages": messages,
+    }
+
+
+# Each delegated workflow can directly respond to the user
+# When the user responds, we want to return to the currently active workflow
+def route_to_workflow(
+    state: State,
+) -> Literal[
+    "primary_assistant",
+    "update_flight",
+    "book_car_rental",
+    "book_hotel",
+    "book_excursion",
+]:
+    """If we are in a delegated state, route directly to the appropriate assistant."""
+    dialog_state = state.get("dialog_state")
+    if not dialog_state:
+        return "primary_assistant"
+    return dialog_state[-1]
+
+
 def create_agent(passenger_id: str) -> StateGraph:
-    assistant_runnable = primary_assistant_prompt | llm.bind_tools(tools)
+    from langchain_openai import ChatOpenAI
+
+    llm = ChatOpenAI(
+        base_url=os.environ.get("MODEL_BASE_URL"),
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        model="gpt-3.5-turbo",
+        temperature=1,
+        streaming=True,
+    )
 
     builder = StateGraph(State)
 
+    # 添加基础节点
     builder.add_node("fetch_user_info", user_info)
-    builder.add_node("assistant", Assistant(assistant_runnable))
-    builder.add_node("tools", create_tool_node_with_fallback(tools))
+
+    # Primary assistant
+    builder.add_node("primary_assistant", create_primary_assistant(llm))
+    builder.add_node(
+        "primary_assistant_tools",
+        create_tool_node_with_fallback(primary_assistant_tools),
+    )
+    # 添加退出节点
+    builder.add_node("leave_skill", pop_dialog_state)
+
+    # Flight booking assistant
+    create_specialized_subgraph(
+        builder=builder,
+        assistant_name="update_flight",
+        assistant_name_des="Flight Updates & Booking Assistant",
+        prompt=flight_booking_prompt,
+        safe_tools=update_flight_safe_tools,
+        sensitive_tools=update_flight_sensitive_tools,
+        llm=llm,
+        route_function=route_update_flight,
+    )
+
+    # Car rental assistant
+    create_specialized_subgraph(
+        builder=builder,
+        assistant_name="book_car_rental",
+        assistant_name_des="Car Rental Assistant",
+        prompt=book_car_rental_prompt,
+        safe_tools=book_car_rental_safe_tools,
+        sensitive_tools=book_car_rental_sensitive_tools,
+        llm=llm,
+        route_function=route_book_car_rental,
+    )
+
+    # Hotel booking assistant
+    create_specialized_subgraph(
+        builder=builder,
+        assistant_name="book_hotel",
+        assistant_name_des="Hotel Booking Assistant",
+        prompt=book_hotel_prompt,
+        safe_tools=book_hotel_safe_tools,
+        sensitive_tools=book_hotel_sensitive_tools,
+        llm=llm,
+        route_function=route_book_hotel,
+    )
+
+    # Excursion assistant
+    create_specialized_subgraph(
+        builder=builder,
+        assistant_name="book_excursion",
+        assistant_name_des="Trip Recommendation Assistant",
+        prompt=book_excursion_prompt,
+        safe_tools=book_excursion_safe_tools,
+        sensitive_tools=book_excursion_sensitive_tools,
+        llm=llm,
+        route_function=route_book_excursion,
+    )
 
     builder.add_edge(START, "fetch_user_info")
-    builder.add_edge("fetch_user_info", "assistant")
-    builder.add_conditional_edges("assistant", tools_condition)
-    builder.add_edge("tools", "assistant")
+    builder.add_conditional_edges("fetch_user_info", route_to_workflow)
+    builder.add_conditional_edges(
+        "primary_assistant",
+        route_primary_assistant,
+        [
+            "enter_update_flight",
+            "enter_book_car_rental",
+            "enter_book_hotel",
+            "enter_book_excursion",
+            "primary_assistant_tools",
+            END,
+        ],
+    )
+    builder.add_edge("primary_assistant_tools", "primary_assistant")
+
     memory = MemorySaver()
-    graph = builder.compile(checkpointer=memory, interrupt_before=["tools"])
+    graph = builder.compile(
+        checkpointer=memory,
+        interrupt_before=[
+            "update_flight_sensitive_tools",
+            "book_car_rental_sensitive_tools",
+            "book_hotel_sensitive_tools",
+            "book_excursion_sensitive_tools",
+        ],
+    )
     graph = graph.with_config(
         configurable={
             "passenger_id": passenger_id,
@@ -140,48 +189,6 @@ def create_agent(passenger_id: str) -> StateGraph:
         }
     )
     return graph
-
-
-# def _print_event(event, printed):
-#     """打印事件，避免重复打印"""
-#     for key, value in event.items():
-#         if key not in printed:
-#             print(f"\n=== {key} 事件 ===")
-#             if key == "assistant":
-#                 if "messages" in value:
-#                     message = value["messages"]
-#                     # 处理 AIMessage 对象
-#                     if isinstance(message, AIMessage):
-#                         if message.content:
-#                             print(f"AI回复: {message.content}")
-                        
-#                         # 处理工具调用
-#                         if hasattr(message, "additional_kwargs") and "tool_calls" in message.additional_kwargs:
-#                             tool_calls = message.additional_kwargs["tool_calls"]
-#                             print("\n工具调用详情:")
-#                             for tool_call in tool_calls:
-#                                 print(f"- 工具名称: {tool_call['function']['name']}")
-#                                 print(f"- 调用ID: {tool_call['id']}")
-#                                 print(f"- 参数: {tool_call['function']['arguments']}")
-                        
-#                         # 处理响应元数据
-#                         if hasattr(message, "response_metadata"):
-#                             metadata = message.response_metadata
-#                             print("\n响应元数据:")
-#                             print(f"- 完成原因: {metadata.get('finish_reason', 'unknown')}")
-#                             print(f"- 模型名称: {metadata.get('model_name', 'unknown')}")
-            
-#             elif key == "messages" and value:
-#                 if isinstance(value, list) and value:
-#                     last_message = value[-1]
-#                     if hasattr(last_message, "content"):
-#                         print(f"消息内容: {last_message.content}")
-#                     if hasattr(last_message, "tool_calls"):
-#                         print("工具调用:")
-#                         for tool_call in last_message.tool_calls:
-#                             print(f"- {tool_call}")
-            
-#             printed.add(key)
 
 
 def _print_event(event, printed):
@@ -246,16 +253,18 @@ def process_message(
         else:
             print(f"拒绝原因: {user_input}")
             print("重新规划执行...")
-            result = list(agent.stream(
-                {
-                    "messages": [
-                        ToolMessage(
-                            tool_call_id=events["messages"][-1].tool_calls[0]["id"],
-                            content=f"API调用被用户拒绝。原因: '{user_input}'。请继续协助，考虑用户的输入。",
-                        )
-                    ]
-                },
-            ))
+            result = list(
+                agent.stream(
+                    {
+                        "messages": [
+                            ToolMessage(
+                                tool_call_id=events["messages"][-1].tool_calls[0]["id"],
+                                content=f"API调用被用户拒绝。原因: '{user_input}'。请继续协助，考虑用户的输入。",
+                            )
+                        ]
+                    },
+                )
+            )
 
         # 更新事件列表
         if result:
@@ -272,7 +281,7 @@ def process_message(
                 chunk = assistant_message.content
                 response_chunks.append(chunk)
                 yield chunk
-        
+
         # 打印事件
         _print_event(event, _printed)
 
@@ -325,4 +334,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+
+    agent = create_agent(get_user_id())
+    # 生成图表并保存为文件
+    graph_png = agent.get_graph(xray=True).draw_mermaid_png()
+
+    # 保存到文件
+    with open("agent_graph.png", "wb") as f:
+        f.write(graph_png)
+    print("图表已保存为 agent_graph.png")
