@@ -1,7 +1,6 @@
-from typing import Any, Dict, List
+from typing import Any
 from langchain_core.runnables import Runnable, RunnableConfig
-from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 class CompleteOrEscalate(BaseModel):
     """A tool to mark the current task as completed and/or to escalate control of the dialog to the main assistant,
